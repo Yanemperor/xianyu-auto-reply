@@ -4,7 +4,7 @@
 
 # ====== 第一阶段：构建 ======
 # 基础镜像走 docker.io 官方名（由 buildx 的 buildkitd 镜像加速配置拉取，见流水线 BUILDKIT 配置）
-FROM node:18-alpine AS builder
+FROM node:18-slim AS builder
 
 # 配置国内镜像源
 RUN npm config set registry https://registry.npmmirror.com
@@ -44,6 +44,6 @@ ENV TZ=Asia/Shanghai
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
