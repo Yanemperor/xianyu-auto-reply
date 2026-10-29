@@ -154,6 +154,7 @@ xianyu-auto-reply/
   - `common` 提供模型、数据库、自检、公共服务与工具
 - 返佣子系统位于 `promotion/` 目录，前后端独立，当前不在根目录 Docker Compose 编排内
 - 主系统三个后端服务都提供 `/health` 健康检查接口
+- WebSocket 在数据库、Redis 和服务配置检查完成后即可提供 HTTP 服务，账号配置加载与连接任务调度在后台错峰执行，不再因账号数量增加而推迟 HTTP 就绪。系统设置通过 `/health/ping` 检测消息服务存活，并显示账号启动进度或失败原因；调度完成不代表所有账号已连接，实际连接状态以账号管理为准。关闭服务时会先取消未完成的账号调度，再清理账号任务。
 - Docker 依赖链：mysql/redis → backend-web → websocket → scheduler；frontend → backend-web
 
 ## 快速开始
@@ -219,6 +220,7 @@ curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | 
 - 首次运行自动生成 `.env.remote`，每次运行自动生成 `docker-compose.remote.yml`，均不影响根目录原有的 `.env` / `docker-compose.yml` / `docker-compose.deploy.yml`
 - 容器名与主套保持一致（`xianyu-backend-web` / `xianyu-websocket` / `xianyu-scheduler` / `xianyu-frontend`），与方式二/方式四属于同一套部署，二者只需选其一，不要同时启动
 - 远程 MySQL 需提前创建好数据库（默认 `xianyu_data`）并授权部署机 IP 远程访问，应用启动时会自动建表与补齐字段
+- 远程 Redis 密码可以为空：在 `.env.remote` 中填写 `REDIS_PASSWORD=` 即按无密码连接；有密码时填写实际密码。未定义 `REDIS_PASSWORD` 时使用默认密码 `xianyu@2026`，显式空值不会回退到默认密码
 - 建议远程 MySQL 持久设置 `max_connect_errors=100000`；若出现错误码 1129，需在数据库服务器执行 `FLUSH HOSTS` 解除主机封锁
 - 若远程库/缓存就在宿主机上，请使用 `host.docker.internal` 或宿主机内网 IP，**不要填 `localhost` / `127.0.0.1`**
 
@@ -273,6 +275,18 @@ REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 REDIS_PASSWORD=
 REDIS_DB=0
+REDIS_POOL_SIZE=800
+REDIS_SOCKET_TIMEOUT=5
+REDIS_SOCKET_CONNECT_TIMEOUT=3
+REDIS_SOCKET_KEEPALIVE=true
+REDIS_SOCKET_KEEPALIVE_IDLE=60
+REDIS_SOCKET_KEEPALIVE_INTERVAL=10
+REDIS_SOCKET_KEEPALIVE_COUNT=3
+REDIS_HEALTH_CHECK_INTERVAL=30
+REDIS_PROTOCOL=2
+REDIS_STARTUP_MAX_RETRIES=5
+REDIS_STARTUP_RETRY_BASE_DELAY=1
+REDIS_STARTUP_RETRY_CAP_DELAY=10
 CORS_ORIGINS=*
 BACKEND_WEB_PORT=8089
 WEBSOCKET_PORT=8090
@@ -280,9 +294,29 @@ SCHEDULER_PORT=8091
 WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090
 SCHEDULER_SERVICE_URL=http://127.0.0.1:8091
 BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089
+DB_POOL_SIZE=800
+DB_MAX_OVERFLOW=60
+DB_POOL_TIMEOUT=30
+DB_POOL_RECYCLE=1800
+DB_POOL_PRE_PING=true
+DB_POOL_USE_LIFO=true
+DB_CONNECT_TIMEOUT=10
 STATIC_DIR=static
 TZ=Asia/Shanghai
 ```
+
+各服务的数据库连接池容量统一为 **800**，连接按需建立。各服务 `.env.example`、Docker 和本地启动器保留不同的溢出额度：
+
+| 服务 | DB_POOL_SIZE | DB_MAX_OVERFLOW | 单进程峰值 |
+| --- | ---: | ---: | ---: |
+| Backend-Web | 800 | 60 | 860 |
+| WebSocket | 800 | 150 | 950 |
+| Scheduler | 800 | 30 | 830 |
+| 推广后端（可选） | 800 | 20 | 820 |
+
+三个主服务峰值合计为 **2640**，启用推广后端后为 **3460**。Docker 的 `MYSQL_MAX_CONNECTIONS` 默认设为 **4000**；远程或本机 MySQL 需自行将 `max_connections` 配置到足够容量。多进程、多副本部署时，应按全部进程的峰值总和额外预留管理连接。
+
+已有部署的 `.env` 不会被脚本覆盖，请同步检查服务目录中的 `DB_POOL_SIZE`，以及 Docker 部署目录中的 `BACKEND_DB_POOL_SIZE`、`WEBSOCKET_DB_POOL_SIZE`、`SCHEDULER_DB_POOL_SIZE` 和 `MYSQL_MAX_CONNECTIONS`。配置更新后需重启对应服务才能生效。
 
 #### 3. 启动主系统后端
 
@@ -351,13 +385,66 @@ npm run dev
 |------|------|
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | MySQL 连接 |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DB` | Redis 连接 |
+| `REDIS_POOL_SIZE` / `REDIS_SOCKET_TIMEOUT` / `REDIS_SOCKET_CONNECT_TIMEOUT` / `REDIS_SOCKET_KEEPALIVE` / `REDIS_SOCKET_KEEPALIVE_IDLE` / `REDIS_SOCKET_KEEPALIVE_INTERVAL` / `REDIS_SOCKET_KEEPALIVE_COUNT` / `REDIS_HEALTH_CHECK_INTERVAL` / `REDIS_PROTOCOL` / `REDIS_STARTUP_MAX_RETRIES` / `REDIS_STARTUP_RETRY_BASE_DELAY` / `REDIS_STARTUP_RETRY_CAP_DELAY` | Redis 连接池、超时、Keepalive、健康检查和启动重试配置 |
 | `JWT_SECRET_KEY` | JWT 密钥，由数据库统一托管（首次启动自动生成并持久化），无需手动配置 |
 | `INTERNAL_API_TOKEN` | 服务间 `/internal` API 共享令牌，可留空；首次启动自动生成并持久化到数据库 |
 | `BACKEND_WEB_PORT` / `WEBSOCKET_PORT` / `SCHEDULER_PORT` | 各服务端口 |
 | `WEBSOCKET_SERVICE_URL` / `SCHEDULER_SERVICE_URL` / `BACKEND_WEB_SERVICE_URL` | 服务间调用地址 |
+| `FRONTEND_SERVICE_URL` | 公开状态接口探测前端的内部地址；Docker 默认 `http://frontend:80`，本机默认 `http://127.0.0.1:9000`；自定义端口或跨主机部署时覆盖 |
+| `VITE_BACKEND_SERVICE_URL` | Vite 开发/预览环境的后端代理目标，可回退到 `BACKEND_WEB_SERVICE_URL`；默认 `http://127.0.0.1:8089` |
 | `BACKEND_WEB_PUBLIC_URL` | 对外访问地址，用于生成文件 URL |
 | `CORS_ORIGINS` | CORS 白名单 |
 | `BROWSER_HEADLESS` | Playwright 是否无头运行 |
+
+### 公开服务状态接口
+
+使用前端访问地址请求 `GET /api/v1/public/status`，无需登录或携带用户令牌。例如前端地址为 `https://你的域名` 时，请求 `https://你的域名/api/v1/public/status`；本机默认请求 `http://127.0.0.1:9000/api/v1/public/status`。Docker Nginx、Vite 开发/预览环境和桌面启动器均提供该入口。
+
+尾部带斜杠的 `GET /api/v1/public/status/` 也直接返回相同 JSON 并共享限流额度，不跳转到后端地址。Docker Compose 及部署、更新脚本均透传 `FRONTEND_SERVICE_URL`；需要自定义时在部署 `.env` 中填写后端能够访问的前端内部地址。
+
+误用 POST、PUT、PATCH、DELETE 等方法时仍返回 HTTP 200，业务响应为 `success: false`、`code: 40501`、`message: "请求方法不支持，请使用GET请求"`、`data: null`，也计入同一 IP 的限流额度；超限或 Redis 故障时优先返回对应限流错误。HEAD 请求遵循 HTTP 规范，不返回响应体。
+
+浏览器的 CORS 预检 OPTIONS 请求由跨域中间件先处理，允许时返回 HTTP 200 和 `OK`，不查询服务状态，也不消耗查询额度；随后实际 GET 请求仍执行 Redis 限流。
+
+接口返回前端、后端、消息服务、定时任务服务的存活状态。三个后端服务与系统设置共用同一套健康检查；前端独立检查 `/frontend-health`，不依赖后端。`online_accounts` 沿用仪表盘口径，统计真实建立 WebSocket 连接的闲鱼账号数，查询时直接读取消息服务，未使用仪表盘的 10 秒缓存。
+
+`total_users` 为系统总用户数，`total_accounts` 为全局闲鱼账号总数，与管理员仪表盘的「总用户数」「总账号数」共用统计 SQL，包含已停用用户及未在线账号。公开接口直接查询数据库，不使用管理员仪表盘的 3 秒缓存；两个总数在同一条 SQL 中读取，不返回用户或账号明细。
+
+```json
+{
+  "success": true,
+  "code": 200,
+  "message": "查询成功",
+  "data": {
+    "services": [
+      { "key": "frontend", "label": "前端服务", "online": true },
+      { "key": "backend-web", "label": "后端服务", "online": true },
+      { "key": "websocket", "label": "消息服务", "online": true },
+      { "key": "scheduler", "label": "定时任务服务", "online": true }
+    ],
+    "online_accounts": 0,
+    "online_accounts_available": true,
+    "online_accounts_message": "查询成功",
+    "total_users": 0,
+    "total_accounts": 0,
+    "totals_available": true,
+    "totals_message": "查询成功",
+    "checked_at": "2026-10-25T20:00:00+08:00"
+  }
+}
+```
+
+以上 JSON 仅说明响应格式，运行时全部返回实际探测结果；无法获取在线数量时返回 `online_accounts: null`、`online_accounts_available: false` 和中文原因，不用 0 冒充查询结果。接口只公开汇总数量，不返回账号 ID、服务内部地址或内部令牌。单个服务探测最多等待 5 秒，多个探测并行执行，响应禁止缓存。
+
+数据库总数查询失败或超时时返回 `total_users: null`、`total_accounts: null`、`totals_available: false`、`totals_message: "用户和账号总数暂不可用，请稍后重试"`，仍返回实际服务状态和可获取的在线数量。数据库查询含一次连接失败重试，总等待最多 5 秒，并与服务探测并行执行。部分数量不可用时，顶层仍为 `success: true`、`code: 200`，`message` 明确指出「在线账号数量」「用户和账号总数」中不可用的部分，调用方需同时检查对应的可用标志。
+
+限流使用全局 Redis 健康连接池和原子滑动窗口：同一客户端 IP 在任意连续 30 秒内最多访问 15 次，各后端进程共享额度。IP 通过公共方法读取 `X-Forwarded-For` 首个地址，写入 Redis 前哈希；前端代理覆盖客户端传入的 IP 头。前端前面另有反向代理时，应在 Nginx 为该受信任代理配置 `set_real_ip_from`、`real_ip_header` 和 `real_ip_recursive`，确保 `$remote_addr` 是客户端真实 IP。
+
+Vite 开发/预览环境和桌面启动器会识别公开接口的百分号编码路径，确保同样覆盖 IP 头并执行限流。这两种代理读取完整上游响应后才发送；后端 HTTP 5xx、连接失败或读取中断统一返回 `code: 50303`，避免半截 JSON 和重复响应。
+
+桌面启动器的公开状态请求不读取或转发请求体，避免客户端声明请求体后迟迟不发送内容而阻塞限流；普通业务 API 仍按原逻辑转发请求体。Docker Nginx 的公开接口每 5 秒重新解析后端服务名，后端容器重建换 IP 后无需为该接口重启前端。
+
+超限仍返回 HTTP 200，响应为 `success: false`、`code: 42901`、中文限流提示、`data: null`，并携带 `Retry-After` 等待秒数。Redis 异常返回 `code: 50301` 并拒绝查询；后端不可达时前端入口返回 `code: 50303`，不会返回虚假的服务状态。正常请求附带 `X-RateLimit-Limit`、`X-RateLimit-Window`、`X-RateLimit-Remaining` 响应头。
 
 ### 数据库与初始化
 

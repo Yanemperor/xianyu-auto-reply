@@ -39,6 +39,7 @@ from . import (
     cookies_refresh_logs,
     default_replies,
     face_verification,
+    email_logs,
     feedback,
     geetest,
     goofish_compass,
@@ -66,6 +67,7 @@ from . import (
     external_orders,
     external_publish,
     proxy,
+    public_status,
     refund_cancel,
     agree_deliver,
     agree_pickup,
@@ -81,6 +83,7 @@ from . import (
     token_renewal_logs,
     upload,
     user_settings,
+    user_login_logs,
     users,
     version,
 )
@@ -90,6 +93,7 @@ api_router = APIRouter()
 
 # 健康检查（放在最前面）
 api_router.include_router(health.router, tags=["健康检查"])  # 已定义prefix="/health"
+api_router.include_router(public_status.router, tags=["公开状态"])
 
 # 注册所有路由
 # 注意：路由文件中已定义prefix的，这里不再重复添加prefix
@@ -158,6 +162,8 @@ api_router.include_router(feedback.router, prefix="/feedbacks", tags=["反馈管
 api_router.include_router(advertisements.router, prefix="/advertisements", tags=["广告管理"])
 api_router.include_router(auto_reply_logs.router, tags=["消息日志"])
 api_router.include_router(account_login_logs.router, tags=["账号登录日志"])
+api_router.include_router(user_login_logs.router, tags=["用户登录日志"])
+api_router.include_router(email_logs.router, tags=["邮件日志"])
 api_router.include_router(db_backup_logs.router, tags=["数据库备份日志"])
 api_router.include_router(risk_control_logs.router, tags=["风控日志"])
 
