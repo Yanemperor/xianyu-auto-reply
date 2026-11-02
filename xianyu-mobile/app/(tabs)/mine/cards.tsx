@@ -207,7 +207,9 @@ function buildParams(f: CardFormState): CardCreateParams {
   } else if (f.type === 'data') {
     params.data_content = f.dataContent.trim();
   }
-  if (f.imageUrls.length > 0) params.image_urls = f.imageUrls;
+  params.image_urls = f.imageUrls;
+  // 同步旧版单图字段，避免清空后回退显示旧图片。
+  params.image_url = f.imageUrls[0] || '';
   return params;
 }
 

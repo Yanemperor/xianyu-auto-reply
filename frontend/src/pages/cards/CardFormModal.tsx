@@ -308,9 +308,9 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
         cardData.data_content = formData.dataContent.trim()
       }
 
-      if (formData.imageUrls.length > 0) {
-        cardData.image_urls = formData.imageUrls
-      }
+      cardData.image_urls = formData.imageUrls
+      // 同步旧版单图字段，避免清空后回退显示旧图片。
+      cardData.image_url = formData.imageUrls[0] || ''
 
       if (isEditMode) {
         await updateCard(String(cardId), cardData)
